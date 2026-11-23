@@ -12114,8 +12114,8 @@ impl PendingAlphas {
     }
 }
 
-/// The most bytes of readback buffers kept: two layers the size of a large tablet canvas.
-const READBACKS_KEPT: u64 = 96 << 20;
+/// The most bytes of readback buffers kept: reduced to 32 MB for mobile headroom.
+const READBACKS_KEPT: u64 = 32 << 20;
 
 impl Readback {
     /// How many bytes the pixels take.

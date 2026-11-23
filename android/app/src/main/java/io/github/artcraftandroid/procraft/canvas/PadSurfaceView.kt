@@ -110,16 +110,24 @@ class PadSurfaceView(context: Context, private val vm: CanvasViewModel) : Surfac
     private fun samples(e: MotionEvent, i: Int): List<PenSample> {
         val out = ArrayList<PenSample>(e.historySize + 1)
         for (h in 0 until e.historySize) {
+            val p = e.getHistoricalPressure(i, h).takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0.5f
+            val tilt = e.getHistoricalAxisValue(MotionEvent.AXIS_TILT, i, h).takeIf { it.isFinite() } ?: 0f
+            val orient = e.getHistoricalOrientation(i, h).takeIf { it.isFinite() } ?: 0f
+            val time = e.getHistoricalEventTime(h).toDouble().takeIf { it.isFinite() } ?: 0.0
             out += PenSample(
                 e.getHistoricalX(i, h),
                 e.getHistoricalY(i, h),
-                e.getHistoricalPressure(i, h),
-                penLean(e.getHistoricalAxisValue(MotionEvent.AXIS_TILT, i, h), e.getHistoricalOrientation(i, h)),
-                e.getHistoricalOrientation(i, h),
-                e.getHistoricalEventTime(h).toDouble(),
+                p,
+                penLean(tilt, orient),
+                orient,
+                time,
             )
         }
-        out += PenSample(e.getX(i), e.getY(i), e.getPressure(i), penLean(e.getAxisValue(MotionEvent.AXIS_TILT, i), e.getOrientation(i)), e.getOrientation(i), e.eventTime.toDouble())
+        val p = e.getPressure(i).takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0.5f
+        val tilt = e.getAxisValue(MotionEvent.AXIS_TILT, i).takeIf { it.isFinite() } ?: 0f
+        val orient = e.getOrientation(i).takeIf { it.isFinite() } ?: 0f
+        val time = e.eventTime.toDouble().takeIf { it.isFinite() } ?: 0.0
+        out += PenSample(e.getX(i), e.getY(i), p, penLean(tilt, orient), orient, time)
         return out
     }
 }

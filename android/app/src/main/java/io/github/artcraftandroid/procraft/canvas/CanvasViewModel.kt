@@ -3499,12 +3499,24 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
     fun insertPicture(uri: android.net.Uri, private: Boolean = false) {
         if (session == null) return
         closePanels()
-        val type = getApplication<Application>().contentResolver.getType(uri)
-        if (type?.startsWith("video/") == true) {
-            insertFrames(uri, private)
-            return
+        try {
+            val type = getApplication<Application>().contentResolver.getType(uri)
+            if (type?.startsWith("video/") == true) {
+                insertFrames(uri, private)
+                return
+            }
+            viewModelScope.launch {
+                try {
+                    insertPictureNow(uri, private, transform = true)
+                } catch (e: Throwable) {
+                    AppLog.e("ProCraft", "insertPictureNow failed", e)
+                    message = "Could not insert picture: insufficient memory."
+                }
+            }
+        } catch (e: Throwable) {
+            AppLog.e("ProCraft", "insertPicture failed", e)
+            message = "Could not insert picture."
         }
-        viewModelScope.launch { insertPictureNow(uri, private, transform = true) }
     }
 
     /**
@@ -3575,7 +3587,7 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
             return false
         }
         refresh()
-        if (transform) toggleTransform()
+        if (transform) runCatching { toggleTransform() }
         return true
     }
 
@@ -3693,9 +3705,13 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
             inPreferredColorSpace = android.graphics.ColorSpace.get(if (p3) android.graphics.ColorSpace.Named.DISPLAY_P3 else android.graphics.ColorSpace.Named.SRGB)
         }
         val bitmap = resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) } ?: return null
-        val buffer = ByteBuffer.allocate(bitmap.width * bitmap.height * 4)
-        bitmap.copyPixelsToBuffer(buffer)
-        io.github.artcraftandroid.procraft.core.ThumbnailImage(bitmap.width.toUInt(), bitmap.height.toUInt(), buffer.array())
+        try {
+            val buffer = ByteBuffer.allocate(bitmap.width * bitmap.height * 4)
+            bitmap.copyPixelsToBuffer(buffer)
+            io.github.artcraftandroid.procraft.core.ThumbnailImage(bitmap.width.toUInt(), bitmap.height.toUInt(), buffer.array())
+        } finally {
+            bitmap.recycle()
+        }
     }.getOrNull()
 
     // QuickShape
@@ -8443,8 +8459,8 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
         const val RAPID_UNDO_MIN_S = 0.1f
         const val RAPID_UNDO_MAX_S = 1.5f
         const val SELECTION_VISIBILITY = "selection_visibility"
-        /** The largest side a picture brought in is decoded at (pixels). */
-        const val MAX_PICTURE = 4096
+        /** The largest side a picture brought in is decoded at (pixels). Reduced to 2048 to prevent LMK on A4 canvas. */
+        const val MAX_PICTURE = 2048
         /** How long a stroke is held still to snap (milliseconds), how still (points), and how near a handle a touch takes it. */
         const val QUICKSHAPE_MS = 650L
         const val QUICKSHAPE_STILL_DP = 6f

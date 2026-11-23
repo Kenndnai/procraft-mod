@@ -75,6 +75,49 @@ pub(crate) fn premultiplied(mut image: ThumbnailImage) -> ThumbnailImage {
 }
 
 /// `image` placed on a `width` × `height` canvas: centred, and scaled down to fit when `fit` and
+/// it is larger (premultiplied RGBA8; anything outside is cut off). Returns its bounding rect
+/// on the canvas and its tightly packed pixels without allocating a full canvas buffer.
+fn placed_part(image: ThumbnailImage, width: u32, height: u32, fit: bool) -> Option<(IRect, Vec<u8>)> {
+    let (iw, ih) = (image.width as usize, image.height as usize);
+    if iw == 0 || ih == 0 || image.rgba.len() != iw * ih * 4 {
+        return None;
+    }
+    let (w, h) = (width as usize, height as usize);
+    let scale = if fit { (w as f32 / iw as f32).min(h as f32 / ih as f32).min(1.0) } else { 1.0 };
+    let (sw, sh) = ((iw as f32 * scale).round().max(1.0) as usize, (ih as f32 * scale).round().max(1.0) as usize);
+    let (ox, oy) = ((w as i64 - sw as i64) / 2, (h as i64 - sh as i64) / 2);
+    let (x0, x1) = ((-ox).max(0) as usize, ((w as i64 - ox).min(sw as i64)).max(0) as usize);
+    let (y0, y1) = ((-oy).max(0) as usize, ((h as i64 - oy).min(sh as i64)).max(0) as usize);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    let rw = x1 - x0;
+    let rh = y1 - y0;
+    let rect = IRect::new((ox + x0 as i64) as i32, (oy + y0 as i64) as i32, (ox + x1 as i64) as i32, (oy + y1 as i64) as i32);
+    let cols: Vec<usize> = (x0..x1).map(|x| (((x as f32 + 0.5) / scale) as usize).min(iw - 1)).collect();
+    let unscaled = scale == 1.0;
+    let mut part = vec![0u8; rw * rh * 4];
+    for y in y0..y1 {
+        let sy = (((y as f32 + 0.5) / scale) as usize).min(ih - 1);
+        let row = image.rgba.get(sy * iw * 4..(sy + 1) * iw * 4).unwrap_or_default();
+        let at = (y - y0) * rw * 4;
+        let Some(to) = part.get_mut(at..at + rw * 4) else { continue };
+        if unscaled {
+            if let Some(from) = row.get(x0 * 4..x1 * 4) {
+                to.copy_from_slice(from);
+            }
+            continue;
+        }
+        for (px, &sx) in to.as_chunks_mut::<4>().0.iter_mut().zip(&cols) {
+            if let Some(from) = row.get(sx * 4..sx * 4 + 4) {
+                px.copy_from_slice(from);
+            }
+        }
+    }
+    Some((rect, part))
+}
+
+/// `image` placed on a `width` × `height` canvas: centred, and scaled down to fit when `fit` and
 /// it is larger (premultiplied RGBA8; anything outside is cut off).
 fn placed(image: ThumbnailImage, width: u32, height: u32, fit: bool) -> Option<Vec<u8>> {
     let (iw, ih) = (image.width as usize, image.height as usize);
@@ -85,36 +128,18 @@ fn placed(image: ThumbnailImage, width: u32, height: u32, fit: bool) -> Option<V
     if (image.width, image.height) == (width, height) {
         return Some(image.rgba);
     }
+    let (rect, part) = placed_part(image, width, height, fit)?;
     let (w, h) = (width as usize, height as usize);
-    let scale = if fit { (w as f32 / iw as f32).min(h as f32 / ih as f32).min(1.0) } else { 1.0 };
-    let (sw, sh) = ((iw as f32 * scale).round().max(1.0) as usize, (ih as f32 * scale).round().max(1.0) as usize);
-    let (ox, oy) = ((w as i64 - sw as i64) / 2, (h as i64 - sh as i64) / 2);
     let mut out = vec![0u8; w * h * 4];
-    // the target columns on the canvas, and each one's nearest source column (scaling only ever
-    // shrinks), worked out once
-    let (x0, x1) = ((-ox).max(0) as usize, ((w as i64 - ox).min(sw as i64)).max(0) as usize);
-    let cols: Vec<usize> = (x0..x1).map(|x| (((x as f32 + 0.5) / scale) as usize).min(iw - 1)).collect();
-    let unscaled = scale == 1.0;
-    for y in 0..sh {
-        let ty = oy + y as i64;
-        if ty < 0 || ty >= h as i64 {
-            continue;
+    let rw = rect.width() as usize;
+    for (y, chunk) in part.chunks_exact(rw * 4).enumerate() {
+        let ty = (rect.y0 as usize) + y;
+        if ty >= h {
+            break;
         }
-        let sy = (((y as f32 + 0.5) / scale) as usize).min(ih - 1);
-        let at = (ty as usize * w + (ox + x0 as i64) as usize) * 4;
-        let Some(to) = out.get_mut(at..at + (x1 - x0) * 4) else { continue };
-        let row = image.rgba.get(sy * iw * 4..(sy + 1) * iw * 4).unwrap_or_default();
-        if unscaled {
-            // a row as it is
-            if let Some(from) = row.get(x0 * 4..x1 * 4) {
-                to.copy_from_slice(from);
-            }
-            continue;
-        }
-        for (px, &sx) in to.as_chunks_mut::<4>().0.iter_mut().zip(&cols) {
-            if let Some(from) = row.get(sx * 4..sx * 4 + 4) {
-                px.copy_from_slice(from);
-            }
+        let at = (ty * w + rect.x0 as usize) * 4;
+        if let Some(to) = out.get_mut(at..at + rw * 4) {
+            to.copy_from_slice(chunk);
         }
     }
     Some(out)
@@ -354,7 +379,7 @@ impl CanvasSession {
             let st = self.shared.lock();
             (st.doc.width(), st.doc.height())
         };
-        let pixels = placed(image, w, h, fit)?;
+        let (rect, part) = placed_part(image, w, h, fit)?;
         // none if there is no room for it (the new layer may take the last)
         let id = self.change("new layer", |d| {
             d.has_room(1).then(|| {
@@ -365,21 +390,7 @@ impl CanvasSession {
         })?;
         let mut guard = self.shared.lock();
         let st = &mut *guard;
-        // only what is painted is sent (the new layer is clear elsewhere): a copied layer comes
-        // the canvas's size, often mostly clear
-        if let (Some(canvas), Some(gpu), Some(rect)) =
-            (st.canvas.as_mut(), st.gpu.as_ref(), crate::layer_ops::painted_rect(&pixels, w))
-        {
-            let part = if rect == IRect::from_size(w, h) {
-                pixels
-            } else {
-                let (row, x0, x1) = (w as usize * 4, rect.x0 as usize * 4, rect.x1 as usize * 4);
-                let mut part = Vec::with_capacity((x1 - x0) * rect.height() as usize);
-                for line in pixels.chunks_exact(row.max(1)).skip(rect.y0 as usize).take(rect.height() as usize) {
-                    part.extend_from_slice(line.get(x0..x1).unwrap_or_default());
-                }
-                part
-            };
+        if let (Some(canvas), Some(gpu)) = (st.canvas.as_mut(), st.gpu.as_ref()) {
             canvas.upload_layer_part(gpu, LayerId(id), rect, &part).ok()?;
         }
         st.revision += 1;

@@ -705,16 +705,29 @@ impl Averaged {
 
     /// The input came on to `to`, `steps` samples after it last did.
     fn add(&mut self, to: PathPoint, steps: f64) {
+        if !to.pos.is_finite() {
+            return;
+        }
+        if !steps.is_finite() || steps <= 0.0 {
+            if let Some(last) = self.points.last_mut() {
+                *last = to;
+            } else {
+                self.points.push(to);
+            }
+            self.input = Some(to);
+            return;
+        }
         let Some(from) = self.input.replace(to) else {
             self.points.push(to);
             return;
         };
         let mut next = 1.0 - self.past;
         while next <= steps {
-            self.points.push(from.lerp(to, (next / steps) as f32));
+            let t = ((next / steps) as f32).clamp(0.0, 1.0);
+            self.points.push(from.lerp(to, t));
             next += 1.0;
         }
-        self.past = steps - (next - 1.0);
+        self.past = (steps - (next - 1.0)).clamp(0.0, 1.0);
     }
 
     /// The input ends where it is: that is its last point.
@@ -1874,21 +1887,23 @@ impl StrokeBuilder {
     /// the stroke is drawn for show or is an exact path; and the speed the path went there at.
     fn pressed_on(&mut self, p: PathPoint, dt: Option<f64>) -> PathPoint {
         let pen = self.pointer.has_pressure();
-        let curved = if pen { self.brush.pressures(p.pressure) } else { [1.0; 5] };
+        let pressure_clean = if p.pressure.is_finite() { p.pressure.clamp(0.0, 1.0) } else { 0.5 };
+        let curved = if pen { self.brush.pressures(pressure_clean) } else { [1.0; 5] };
         // frames of a 60 Hz display since the last point (a sample's worth at the input's rate,
         // if it came with it)
         let gone = self.pressed_from.zip(dt).map(|(from, dt)| {
             let frames = if dt > 0.0 { (dt * 0.06) as f32 } else { sample_frames(pen) };
-            (p.pos.distance(from), frames)
+            (p.pos.distance(from), frames.max(0.01))
         });
         if let Some((moved, frames)) = gone {
             let moved = moved * self.points_per_pixel / frames;
             let scale = self.input.speed_distance.clamp(0.25, 1.0);
             let over = (moved - SLOW * scale) / (SPAN * scale);
-            let now = if over > 0.0 && !self.steady { over.sqrt().min(1.0) } else { 0.0 };
+            let now = if over > 0.0 && over.is_finite() && !self.steady { over.sqrt().min(1.0) } else { 0.0 };
             // the first move as it is; later ones smoothed over a few frames
             let held = if self.speed_known { SPEED_FRAMES / frames } else { 0.0 };
-            self.speed = ((now + held * self.speed) / (held + 1.0)).clamp(0.0, 1.0);
+            let raw_speed = (now + held * self.speed) / (held + 1.0);
+            self.speed = if raw_speed.is_finite() { raw_speed.clamp(0.0, 1.0) } else { 0.0 };
             self.speed_known = true;
         }
         let soft = match (gone, self.soft) {
@@ -1898,10 +1913,10 @@ impl StrokeBuilder {
             _ => curved,
         };
         self.soft = Some(soft);
-        self.pressure = Some(p.pressure);
+        self.pressure = Some(pressure_clean);
         self.pressed_from = Some(p.pos);
         self.segments = self.segments.saturating_add(1);
-        PathPoint { soft, speed: self.speed, ..p }
+        PathPoint { pressure: pressure_clean, soft, speed: self.speed, ..p }
     }
 
     /// Takes the input on along motion filtering's points up to the `to`th, each filtered with
@@ -1932,6 +1947,9 @@ impl StrokeBuilder {
     /// at the tuned rate) after the last, through stabilisation: each point waits until those
     /// after it within reach of its average are known.
     fn stabilise_to(&mut self, to: PathPoint, dt: Option<f64>, samples: f64, out: &mut Vec<Stamp>) {
+        if !to.pos.is_finite() {
+            return;
+        }
         let half = self.stabilised();
         if half == 0 {
             let pressed = self.pressed_on(to, dt);

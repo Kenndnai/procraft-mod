@@ -312,7 +312,7 @@ class CanvasSurfaceView(context: Context, private val vm: CanvasViewModel) : Sur
     override fun onTouchEvent(e: MotionEvent): Boolean {
         val s = session ?: return true
         if (penButton(e)) return true
-        predictor.record(e)
+        runCatching { predictor.record(e) }
         if (e.actionMasked == MotionEvent.ACTION_DOWN) {
             // Continue filling on a layer that takes no fill: the dialog says why, and the touch does nothing
             if (vm.dropBand == CanvasViewModel.DropBand.FILLING && !vm.currentTakesChanges(paint = true)) {
@@ -507,12 +507,13 @@ class CanvasSurfaceView(context: Context, private val vm: CanvasViewModel) : Sur
     /** Draws the predicted next samples of the stroke ahead of it (replaced at the next input). */
     private fun predict(s: CanvasSession) {
         removeCallbacks(predictionOver)
-        val p = predictor.predict() ?: return
+        val p = runCatching { predictor.predict() }.getOrNull() ?: return
         try {
             val i = p.findPointerIndex(strokePointer)
             if (i >= 0) s.strokePredict(samples(p, i))
+        } catch (_: Throwable) {
         } finally {
-            p.recycle()
+            runCatching { p.recycle() }
         }
         postDelayed(predictionOver, PREDICTION_LASTS_MS)
     }
@@ -528,16 +529,24 @@ class CanvasSurfaceView(context: Context, private val vm: CanvasViewModel) : Sur
     private fun samples(e: MotionEvent, i: Int): List<PenSample> {
         val out = ArrayList<PenSample>(e.historySize + 1)
         for (h in 0 until e.historySize) {
+            val p = e.getHistoricalPressure(i, h).takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0.5f
+            val tilt = e.getHistoricalAxisValue(MotionEvent.AXIS_TILT, i, h).takeIf { it.isFinite() } ?: 0f
+            val orient = e.getHistoricalOrientation(i, h).takeIf { it.isFinite() } ?: 0f
+            val time = e.getHistoricalEventTime(h).toDouble().takeIf { it.isFinite() } ?: 0.0
             out += PenSample(
                 e.getHistoricalX(i, h),
                 e.getHistoricalY(i, h),
-                e.getHistoricalPressure(i, h),
-                penLean(e.getHistoricalAxisValue(MotionEvent.AXIS_TILT, i, h), e.getHistoricalOrientation(i, h)),
-                e.getHistoricalOrientation(i, h),
-                e.getHistoricalEventTime(h).toDouble(),
+                p,
+                penLean(tilt, orient),
+                orient,
+                time,
             )
         }
-        out += PenSample(e.getX(i), e.getY(i), e.getPressure(i), penLean(e.getAxisValue(MotionEvent.AXIS_TILT, i), e.getOrientation(i)), e.getOrientation(i), e.eventTime.toDouble())
+        val p = e.getPressure(i).takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0.5f
+        val tilt = e.getAxisValue(MotionEvent.AXIS_TILT, i).takeIf { it.isFinite() } ?: 0f
+        val orient = e.getOrientation(i).takeIf { it.isFinite() } ?: 0f
+        val time = e.eventTime.toDouble().takeIf { it.isFinite() } ?: 0.0
+        out += PenSample(e.getX(i), e.getY(i), p, penLean(tilt, orient), orient, time)
         return out
     }
 
