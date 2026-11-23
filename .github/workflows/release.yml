@@ -115,9 +115,6 @@ jobs:
         working-directory: android
         env:
           VERSION: ${{ steps.v.outputs.version }}
-          PROCRAFT_KEYSTORE_PASSWORD: ${{ env.PROCRAFT_KEYSTORE_PASSWORD || secrets.PROCRAFT_KEYSTORE_PASSWORD }}
-          PROCRAFT_KEY_ALIAS: ${{ env.PROCRAFT_KEY_ALIAS || secrets.PROCRAFT_KEY_ALIAS }}
-          PROCRAFT_KEY_PASSWORD: ${{ env.PROCRAFT_KEY_PASSWORD || secrets.PROCRAFT_KEY_PASSWORD }}
         run: |
           mkdir -p "$GITHUB_WORKSPACE/dist"
           for build in arm64-v8a:arm64; do
@@ -443,14 +440,5 @@ jobs:
       - name: Publish the release
         run: |
           tag="${GITHUB_REF_NAME:-v0.0.7-beta}"
-          gh release create "$tag" \
-            --title "ProCraft $tag (Optimized for Android 16 & Helio G100 Ultra)" \
-            --notes "### ProCraft v0.0.7-beta (Optimized)
-- Optimized for Android 16 & Helio G100 Ultra (RAM 4 GB)
-- Canvas A4 & high-DPI memory allocation fixes
-- GPU work chunk size reduced to prevent driver timeouts on Mali GPUs
-- Undo history limits reduced to prevent OOM
-- System memory reserve increased to 768 MB" \
-            dist/* || \
-          gh release upload "$tag" dist/* --clobber
+          gh release create "$tag" --title "ProCraft $tag (Optimized for Android 16 & Helio G100)" --notes "Optimized for Android 16 & Helio G100 Ultra (RAM 4 GB)" dist/* || gh release upload "$tag" dist/* --clobber
           echo "Release **$tag** published successfully!" >>"$GITHUB_STEP_SUMMARY"
