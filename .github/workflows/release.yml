@@ -116,6 +116,7 @@ jobs:
         env:
           VERSION: ${{ steps.v.outputs.version }}
         run: |
+          chmod +x gradlew
           mkdir -p "$GITHUB_WORKSPACE/dist"
           for build in arm64-v8a:arm64; do
             ./gradlew --no-daemon :app:assembleRelease "-Pprocraft.abis=${build%:*}" "-Pprocraft.version=$VERSION"
